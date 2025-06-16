@@ -1,0 +1,734 @@
+---
+title: "GSVA for mutil Group"
+author: "Ximing Ran"
+date: "2025-04-25"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: false
+  html_document:
+    # code_folding: hide
+    toc: true
+    toc_float: true
+hitheme: tomorrow
+highlighter: highlight.js
+
+---
+
+```{r setup, include=FALSE}
+# load libraries
+library(tidyverse)
+library(knitr)
+set.seed(2024)
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.path = "./results/01-GSVA-6-group/Analysis_figure/"
+)
+
+theme_set(theme_bw() + theme(legend.position = "bottom"))
+knitr::kable(head(mtcars[, 1:4]), "simple")
+```
+
+```{r}
+library(tibble)
+library(tidyr)
+library(dplyr)
+library(rtracklayer)
+```
+
+
+
+```{r local_function_load}
+# load function from local files
+source(here::here("source", "DEG_functions.R"))
+```
+
+\newpage
+
+# 1. Read the count data
+In this section, we will read the clean count data from the synaptosomes_bulkRNA folder.  We will read the data and merge them into a single table. 
+
+```{r load_bulkRNA_data}
+input_count <- read.csv(here::here("data", "bulkRNA",
+                                      "bulkRNA_counts_cleaned.csv"))
+counts <-  as.data.frame(input_count) %>% 
+  column_to_rownames(var = "gene")
+colnames(counts) <- gsub("-", "_", colnames(counts))
+# replacte the first X in the colnames
+colnames(counts) <- gsub("^X", "", colnames(counts))
+
+
+# raw sample list
+sample_list_raw <- read.csv(here::here("data", "bulkRNA",
+                                      "sample_info_AD.csv")) %>%
+                    mutate(condition = paste0(Diagosis, "_", Treatment),
+                           sample = gsub("-", "_", Sample.name))
+
+
+# Ensure the column names of counts exist in Sample.name
+new_colnames <- sample_list_raw$Label[match(colnames(counts), sample_list_raw$sample )]
+
+# Assign new column names
+colnames(counts) <- new_colnames
+
+
+# sort the columns by the colname
+condition_list <- data.frame(
+  group =sample_list_raw$condition
+)
+
+row.names(condition_list) <- sample_list_raw$Label
+
+counts<- counts[, rownames(condition_list)]
+
+gene_name_mapping<- readRDS(here::here("data","ref" ,"gene_name_mapping.rds"))
+
+
+```
+
+
+
+```{r DESeq2_analysis}
+# Init the result folder structure for the result
+result_folder_all = './results'
+result_folder = result_folder_all
+
+```
+
+
+\newpage
+
+# 2. Visualization for reuslt
+
+## (1) Sample information - PCA plot
+
+```{r Sample_PCA, fig.width=8, fig.height=6}
+figure_folder = result_folder
+# do PCA for counts data
+dds_obj <- DESeqDataSetFromMatrix(countData = counts,
+                                  colData = condition_list,
+                                  design = ~ group)
+vsd.obj <- varianceStabilizingTransformation(dds_obj, blind = TRUE)
+pcaData <- plotPCA(vsd.obj,  intgroup = c("group"), returnData = T)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+
+p <-ggplot(pcaData, aes(PC1, PC2, color=group)) +
+  geom_point(size=3) +
+  labs(x = paste0("PC1: ",percentVar[1],"% variance"),
+       y = paste0("PC2: ",percentVar[2],"% variance"),
+  ) +
+  stat_ellipse(level = 0.95)+
+  theme_bw() +
+  # theme_classic()+
+  theme(text = element_text(family = "Arial", colour = "black")) +
+  # scale_color_manual(values = assigned_colors) +
+  ggrepel::geom_text_repel(aes(label = name), color = "black")
+
+print(p)
+# ggsave("./results/01-Sample_info/01_sample_PCA_plot.pdf", p,width = 8, height = 6, units = "in", dpi = 300)
+# ggsave("./results/01-Sample_info/01_sample_PCA_plot.png", p,width = 8, height = 6, units = "in", dpi = 300)
+#   
+```
+
+## (2) Sample information - Distance heatmap
+
+```{r Sample_dis_Heatmap, fig.width=8, fig.height=6}
+ # Now apply variance stabilizing transformation
+ sampleDists <- dist(t(assay(vsd.obj)))
+ sampleDistMatrix <- as.matrix( sampleDists )
+ rownames(sampleDistMatrix) <- paste( vsd.obj$group )
+ colors <- colorRampPalette( rev(RColorBrewer::brewer.pal(9, "Blues")) )(255)
+ p <- pheatmap::pheatmap(sampleDistMatrix,
+                         clustering_distance_rows = sampleDists,
+                         clustering_distance_cols = sampleDists,
+                         col = colors) 
+print(p)
+
+#  ggsave("./results/01-Sample_info/02_sample_distance_heatmap.pdf", p,width = 8, height = 6, units = "in", dpi = 300)
+# ggsave("./results/01-Sample_info/02_sample_distance_heatmap.png",
+#        p, width = 8, height = 6, units = "in", dpi = 300)
+
+```
+
+\newpage
+
+
+
+# 3. GSVA analysis
+
+```{r GSVA_analysis_C03, fig.width=12, fig.height=6}
+colnames(counts) <- gsub("-", "_", colnames(counts))
+# The following code is used to generate the GSVA matrix , only need to run once
+# set.seed(2025)
+# gmxFile <- here::here("data", "ref", "c5.go.v2023.1.Hs.symbols.gmt")
+# go_list <- getGmt(gmxFile)
+# 
+# geneset <- go_list
+# dat <- as.matrix(counts)
+# 
+# gsvapar <- gsvaParam(dat, geneset, maxDiff=TRUE)
+# gsva_es <- gsva(gsvapar)
+# gsva_matrix <- as.data.frame(gsva_es)
+# 
+# # save the result
+# write.csv(gsva_matrix, "./results/01-GSVA/01_GSVA_matrix.csv")
+
+
+gsva_matrix_6 <- read.csv("./results/01-GSVA/01_GSVA_matrix.csv", row.names = 1)
+
+condition_list_select <- condition_list 
+row.names(condition_list_select) <- gsub("-", "_", rownames(condition_list_select))
+condition_list_select <- condition_list_select %>% filter( row.names(condition_list_select) %in% 
+                                                     c("C03_C","C03_R","C03_S",
+                                                       "A33_C","A33_R","A33_S"))
+
+gsva_matrix_4 <- gsva_matrix_6[,rownames(condition_list_select)]
+
+# create the result folder
+result_folder_C03<- file.path(result_folder_all,"02-GSVA_C03_A33")
+dir.create(result_folder_C03, showWarnings = FALSE)
+write.csv(gsva_matrix_4, "./results/02-GSVA_C03_A33/02_GSVA_matrix_C03_A33.csv")
+
+
+leave_one_out_test <- function(gsva_mat, condition_labels,
+                               group1    = "CTRL_C",
+                               group2    = "AD_C",
+                               var_adjust = 0,
+                               prefix     = "CC_AC") {
+  #' Perform leave-one-out two-sample tests row-wise,
+  #' prefix result columns with `prefix`, and add FDR correction
+  #'
+  #' @param gsva_mat Numeric matrix/data.frame: rows = features, cols = samples
+  #' @param condition_labels Data.frame: rownames = sample IDs, column `group`
+  #' @param group1 Name of reference group in `condition_labels$group`
+  #' @param group2 Name of comparison group in `condition_labels$group`
+  #' @param var_adjust Small constant to add to variances (default = 0)
+  #' @param prefix String to prefix to output columns
+  #' @return A data.frame with original data plus `<prefix>_stat`, `<prefix>_df`, `<prefix>_p_value`, and `<prefix>_FDR`
+  
+  # Identify samples
+  ref_samples  <- rownames(condition_labels)[condition_labels$group == group1]
+  comp_samples <- rownames(condition_labels)[condition_labels$group == group2]
+  n1 <- length(ref_samples)
+  n2 <- length(comp_samples)
+  
+  mat <- as.matrix(gsva_mat)
+  nr  <- nrow(mat)
+  
+  stat_vec <- numeric(nr)
+  df_vec   <- numeric(nr)
+  p_vec    <- numeric(nr)
+  
+  for (i in seq_len(nr)) {
+    mat_lo <- mat[-i, , drop = FALSE]
+    s1_sq  <- var(mat_lo[, ref_samples]) + var_adjust
+    s2_sq  <- var(mat_lo[, comp_samples]) + var_adjust
+    m1     <- mean(mat[i, ref_samples])
+    m2     <- mean(mat[i, comp_samples])
+    se     <- sqrt(s1_sq / n1 + s2_sq / n2)
+    
+    if (n1 > 1 && n2 > 1) {
+      t_stat   <- (m1 - m2) / se
+      df_welch <- ( (s1_sq/n1 + s2_sq/n2)^2 ) /
+                  ( (s1_sq/n1)^2/(n1-1) + (s2_sq/n2)^2/(n2-1) )
+      p_val    <- 2 * pt(-abs(t_stat), df_welch)
+      
+      stat_vec[i] <- t_stat
+      df_vec[i]   <- df_welch
+      p_vec[i]    <- p_val
+      
+    } else {
+      z_stat <- (m1 - m2) / se
+      p_val  <- 2 * pnorm(-abs(z_stat))
+      
+      stat_vec[i] <- z_stat
+      df_vec[i]   <- NA
+      p_vec[i]    <- p_val
+    }
+  }
+  
+  # Assemble output
+  out <- as.data.frame(mat, stringsAsFactors = FALSE)
+  # Dynamically name columns
+  stat_col <- paste0(prefix, "_stat")
+  df_col   <- paste0(prefix, "_df")
+  p_col    <- paste0(prefix, "_p_value")
+  fdr_col  <- paste0(prefix, "_padj")
+  
+  out[[stat_col]] <- stat_vec
+  out[[df_col]]   <- df_vec
+  out[[p_col]]    <- p_vec
+  out[[fdr_col]]  <- p.adjust(p_vec, method = "BH")
+  
+  return(out)
+}
+
+
+#---------------------------------#
+#                                 #
+#          Group Compare          #
+#                                 #
+#---------------------------------#
+
+result_df <- leave_one_out_test(
+  gsva_matrix_4,
+  condition_list_select,
+  group1 = "CTRL_C",
+  group2 = "AD_C",
+  var_adjust = 1e-6,
+  prefix = "CC_AC"
+)
+
+result_df <- leave_one_out_test(
+  result_df,
+  condition_list_select,
+  group1 = "CTRL_C",
+  group2 = "CTRL_S",
+  var_adjust = 1e-6,
+  prefix = "CC_CS"
+)
+
+result_df <- leave_one_out_test(
+  result_df,
+  condition_list_select,
+  group1 = "CTRL_C",
+  group2 = "CTRL_R",
+  var_adjust = 1e-6,
+  prefix = "CC_CR"
+)
+
+result_df <- leave_one_out_test(
+  result_df,
+  condition_list_select,
+  group1 = "CTRL_S",
+  group2 = "CTRL_R",
+  var_adjust = 1e-6,
+  prefix = "CS_CR"
+)
+
+
+result_df <- leave_one_out_test(
+  result_df,
+  condition_list_select,
+  group1 = "AD_C",
+  group2 = "AD_S",
+  var_adjust = 1e-6,
+  prefix = "AC_AS"
+)
+
+result_df <- leave_one_out_test(
+  result_df,
+  condition_list_select,
+  group1 = "AD_C",
+  group2 = "AD_R",
+  var_adjust = 1e-6,
+  prefix = "AC_AR"
+)
+
+result_df <- leave_one_out_test(
+  result_df,
+  condition_list_select,
+  group1 = "AD_S",
+  group2 = "AD_R",
+  var_adjust = 1e-6,
+  prefix = "AS_AR"
+)
+
+
+
+
+write.csv(result_df, "./results/02-GSVA_C03_A33/02_GSVA_matrix_C03_A33_p_value.csv")
+
+# select the significant pathway
+gsva_matrix_4_sel <- result_df %>% filter(CC_AC_p_value < 0.05 )
+
+write.csv(gsva_matrix_4_sel, "./results/02-GSVA_C03_A33/03_GSVA_matrix_C03_A33_sign.csv")
+
+
+```
+
+
+```{r select_pathway_C03, fig.width=4, fig.height=6}
+
+box_plot_folder<- file.path(result_folder,"02-GSVA_C03_A33","Boxplot")
+dir.create(box_plot_folder, showWarnings = FALSE)
+
+gsva_matrix <- read.csv( "./results/02-GSVA_C03_A33/03_GSVA_matrix_C03_A33_sign.csv", row.names = 1)
+colnames(gsva_matrix) <- sub("^X", "", colnames(gsva_matrix))
+
+library(forcats)
+condition_list_select$group <- fct_recode(condition_list_select$group,
+  "CC" = "CTRL_C",
+  "CR" = "CTRL_R",
+  "CS" = "CTRL_S",
+  "AC" = "AD_C",
+  "AR" = "AD_R",
+  "AS" = "AD_S"
+)
+levels(condition_list_select$group) <- c("CC", "CS", "CR", "AC",  "AS","AR")
+
+# plot the heatmap for the GSVA result
+pathway_list <- rownames(gsva_matrix)
+# filter it contain the immune inflame, synap, mitocho, amyloid , tau 
+pathway_list <- pathway_list[grep("immune|inflame|synap|mitocho|amyloid", pathway_list, ignore.case = TRUE)]
+
+
+# plot for the focus pathway
+set.seed(2025)
+for (i in 1:length(pathway_list)){
+  pathway_name <- pathway_list[i]
+  # print(pathway_name)
+  if (i %% 10 == 0){
+    print(paste0("Processing ", i, " pathway"))
+  }
+  
+  p<- plot_gsva_boxplot_mutil_7(gsva_matrix,
+                    condition_list_label =condition_list_select,
+                    pathway_name =  pathway_name,
+                    figure_folder = file.path(result_folder_C03,"Boxplot"),
+                    file_name = paste0("GSVA_", pathway_name),
+                    fig.height = 6, fig.width = 6, save=TRUE,
+                    reference_group_1="CC" , compare_group_1="CS", p_value_1 = gsva_matrix[i, "CC_CS_p_value"],
+                    reference_group_2="AC" , compare_group_2="AS", p_value_2 = gsva_matrix[i, "AC_AS_p_value"],
+                    reference_group_3="CS" , compare_group_3="CR", p_value_3 = gsva_matrix[i, "CS_CR_p_value"],
+                    reference_group_4="AS" , compare_group_4="AR", p_value_4 = gsva_matrix[i, "AS_AR_p_value"],
+                    reference_group_5="CC" , compare_group_5="CR", p_value_5 = gsva_matrix[i, "CC_CR_p_value"],
+                    reference_group_6="AC" , compare_group_6="AR", p_value_6 = gsva_matrix[i, "AC_AR_p_value"],
+                    reference_group_7="CC" , compare_group_7="AC", p_value_7 = gsva_matrix[i, "CC_AC_p_value"])
+  # print(p)
+}
+
+
+
+
+# plot the heatmap for the GSVA result
+pathway_list <- rownames(result_df )
+# filter it contain the immune inflame, synap, mitocho, amyloid , tau 
+pathway_list <- pathway_list[grep("amyloid", pathway_list, ignore.case = TRUE)]
+
+
+
+
+# plot for the focus pathway
+set.seed(2025)
+for (i in 1:length(pathway_list)){
+  pathway_name <- pathway_list[i]
+  # print(pathway_name)
+  if (i %% 10 == 0){
+    print(paste0("Processing ", i, " pathway"))
+  }
+  
+  p<- plot_gsva_boxplot_mutil_7(result_df,
+                                condition_list_label = condition_list_select,
+                                pathway_name =  pathway_name,
+                                figure_folder = file.path(result_folder_C03,"Boxplot-amyloid"),
+                                file_name = paste0("GSVA_", pathway_name),
+                                fig.height = 6, fig.width = 6, save=TRUE,
+                                reference_group_1="CC" , compare_group_1="CS", p_value_1 = result_df[i, "CC_CS_p_value"],
+                                reference_group_2="AC" , compare_group_2="AS", p_value_2 = result_df[i, "AC_AS_p_value"],
+                                reference_group_3="CS" , compare_group_3="CR", p_value_3 = result_df[i, "CS_CR_p_value"],
+                                reference_group_4="AS" , compare_group_4="AR", p_value_4 = result_df[i, "AS_AR_p_value"],
+                                reference_group_5="CC" , compare_group_5="CR", p_value_5 = result_df[i, "CC_CR_p_value"],
+                                reference_group_6="AC" , compare_group_6="AR", p_value_6 = result_df[i, "AC_AR_p_value"],
+                                reference_group_7="CC" , compare_group_7="AC", p_value_7 = result_df[i, "CC_AC_p_value"])
+  # print(p)
+}
+
+
+
+
+
+
+
+
+```
+
+
+\newpage
+# result for other group
+
+
+```{r GSVA_analysis_C09, fig.width=12, fig.height=6}
+colnames(counts) <- gsub("-", "_", colnames(counts))
+# The following code is used to generate the GSVA matrix , only need to run once
+# set.seed(2025)
+# gmxFile <- here::here("data", "ref", "c5.go.v2023.1.Hs.symbols.gmt")
+# go_list <- getGmt(gmxFile)
+# 
+# geneset <- go_list
+# dat <- as.matrix(counts)
+# 
+# gsvapar <- gsvaParam(dat, geneset, maxDiff=TRUE)
+# gsva_es <- gsva(gsvapar)
+# gsva_matrix <- as.data.frame(gsva_es)
+# 
+# # save the result
+# write.csv(gsva_matrix, "./results/01-GSVA/01_GSVA_matrix.csv")
+
+
+gsva_matrix_6 <- read.csv("./results/01-GSVA/01_GSVA_matrix.csv", row.names = 1)
+
+condition_list_select <- condition_list 
+row.names(condition_list_select) <- gsub("-", "_", rownames(condition_list_select))
+condition_list_select <- condition_list_select %>% filter( row.names(condition_list_select) %in% 
+                                                     c("C09_C","C09_R","C09_S",
+                                                       "A33_C","A33_R","A33_S"))
+
+gsva_matrix_4 <- gsva_matrix_6[,rownames(condition_list_select)]
+
+result_folder_C09 <- file.path(result_folder_all,"03-GSVA_C09_A33")
+dir.create(result_folder_C09, showWarnings = FALSE)
+write.csv(gsva_matrix_4, "./results/03-GSVA_C09_A33/01_GSVA_matrix_C09_A33.csv")
+
+
+leave_one_out_test <- function(gsva_mat, condition_labels,
+                               group1    = "CTRL_C",
+                               group2    = "AD_C",
+                               var_adjust = 0,
+                               prefix     = "CC_AC") {
+  #' Perform leave-one-out two-sample tests row-wise,
+  #' prefix result columns with `prefix`, and add FDR correction
+  #'
+  #' @param gsva_mat Numeric matrix/data.frame: rows = features, cols = samples
+  #' @param condition_labels Data.frame: rownames = sample IDs, column `group`
+  #' @param group1 Name of reference group in `condition_labels$group`
+  #' @param group2 Name of comparison group in `condition_labels$group`
+  #' @param var_adjust Small constant to add to variances (default = 0)
+  #' @param prefix String to prefix to output columns
+  #' @return A data.frame with original data plus `<prefix>_stat`, `<prefix>_df`, `<prefix>_p_value`, and `<prefix>_FDR`
+  
+  # Identify samples
+  ref_samples  <- rownames(condition_labels)[condition_labels$group == group1]
+  comp_samples <- rownames(condition_labels)[condition_labels$group == group2]
+  n1 <- length(ref_samples)
+  n2 <- length(comp_samples)
+  
+  mat <- as.matrix(gsva_mat)
+  nr  <- nrow(mat)
+  
+  stat_vec <- numeric(nr)
+  df_vec   <- numeric(nr)
+  p_vec    <- numeric(nr)
+  
+  for (i in seq_len(nr)) {
+    mat_lo <- mat[-i, , drop = FALSE]
+    s1_sq  <- var(mat_lo[, ref_samples]) + var_adjust
+    s2_sq  <- var(mat_lo[, comp_samples]) + var_adjust
+    m1     <- mean(mat[i, ref_samples])
+    m2     <- mean(mat[i, comp_samples])
+    se     <- sqrt(s1_sq / n1 + s2_sq / n2)
+    
+    if (n1 > 1 && n2 > 1) {
+      t_stat   <- (m1 - m2) / se
+      df_welch <- ( (s1_sq/n1 + s2_sq/n2)^2 ) /
+                  ( (s1_sq/n1)^2/(n1-1) + (s2_sq/n2)^2/(n2-1) )
+      p_val    <- 2 * pt(-abs(t_stat), df_welch)
+      
+      stat_vec[i] <- t_stat
+      df_vec[i]   <- df_welch
+      p_vec[i]    <- p_val
+      
+    } else {
+      z_stat <- (m1 - m2) / se
+      p_val  <- 2 * pnorm(-abs(z_stat))
+      
+      stat_vec[i] <- z_stat
+      df_vec[i]   <- NA
+      p_vec[i]    <- p_val
+    }
+  }
+  
+  # Assemble output
+  out <- as.data.frame(mat, stringsAsFactors = FALSE)
+  # Dynamically name columns
+  stat_col <- paste0(prefix, "_stat")
+  df_col   <- paste0(prefix, "_df")
+  p_col    <- paste0(prefix, "_p_value")
+  fdr_col  <- paste0(prefix, "_padj")
+  
+  out[[stat_col]] <- stat_vec
+  out[[df_col]]   <- df_vec
+  out[[p_col]]    <- p_vec
+  out[[fdr_col]]  <- p.adjust(p_vec, method = "BH")
+  
+  return(out)
+}
+
+
+#---------------------------------#
+#                                 #
+#          Group Compare          #
+#                                 #
+#---------------------------------#
+
+result_df <- leave_one_out_test(
+  gsva_matrix_4,
+  condition_list_select,
+  group1 = "CTRL_C",
+  group2 = "AD_C",
+  var_adjust = 1e-6,
+  prefix = "CC_AC"
+)
+
+result_df <- leave_one_out_test(
+  result_df,
+  condition_list_select,
+  group1 = "CTRL_C",
+  group2 = "CTRL_S",
+  var_adjust = 1e-6,
+  prefix = "CC_CS"
+)
+
+result_df <- leave_one_out_test(
+  result_df,
+  condition_list_select,
+  group1 = "CTRL_C",
+  group2 = "CTRL_R",
+  var_adjust = 1e-6,
+  prefix = "CC_CR"
+)
+
+result_df <- leave_one_out_test(
+  result_df,
+  condition_list_select,
+  group1 = "CTRL_S",
+  group2 = "CTRL_R",
+  var_adjust = 1e-6,
+  prefix = "CS_CR"
+)
+
+
+result_df <- leave_one_out_test(
+  result_df,
+  condition_list_select,
+  group1 = "AD_C",
+  group2 = "AD_S",
+  var_adjust = 1e-6,
+  prefix = "AC_AS"
+)
+
+result_df <- leave_one_out_test(
+  result_df,
+  condition_list_select,
+  group1 = "AD_C",
+  group2 = "AD_R",
+  var_adjust = 1e-6,
+  prefix = "AC_AR"
+)
+
+result_df <- leave_one_out_test(
+  result_df,
+  condition_list_select,
+  group1 = "AD_S",
+  group2 = "AD_R",
+  var_adjust = 1e-6,
+  prefix = "AS_AR"
+)
+
+write.csv(result_df, "./results/03-GSVA_C09_A33/02_GSVA_matrix_C09_A33_p_value.csv")
+gsva_matrix_4_sel <- result_df %>% filter(CC_AC_p_value < 0.05 )
+write.csv(gsva_matrix_4_sel, "./results/03-GSVA_C09_A33/03_GSVA_matrix_C09_A33_sign.csv")
+
+```
+
+
+```{r select_pathway_C09, fig.width=4, fig.height=6}
+
+box_plot_folder<- file.path(result_folder,"03-GSVA_C09_A33","Boxplot")
+dir.create(box_plot_folder, showWarnings = FALSE)
+
+gsva_matrix <- read.csv( "./results/03-GSVA_C09_A33/03_GSVA_matrix_C09_A33_sign.csv", row.names = 1)
+colnames(gsva_matrix) <- sub("^X", "", colnames(gsva_matrix))
+
+library(forcats)
+condition_list_select$group <- fct_recode(condition_list_select$group,
+  "CC" = "CTRL_C",
+  "CR" = "CTRL_R",
+  "CS" = "CTRL_S",
+  "AC" = "AD_C",
+  "AR" = "AD_R",
+  "AS" = "AD_S"
+)
+levels(condition_list_select$group) <- c("CC", "CS", "CR", "AC",  "AS","AR")
+
+# plot the heatmap for the GSVA result
+pathway_list <- rownames(gsva_matrix)
+pathway_list <- pathway_list[grep("immune|inflame|synap|mitocho|amyloid", pathway_list, ignore.case = TRUE)]
+
+# plot for the focus pathway
+set.seed(2025)
+for (i in 1:length(pathway_list)){
+  pathway_name <- pathway_list[i]
+  # print(pathway_name)
+  if (i %% 10 == 0){
+    print(paste0("Processing ", i, " pathway"))
+  }
+  
+  p<- plot_gsva_boxplot_mutil_7(gsva_matrix,
+                    condition_list_label =condition_list_select,
+                    pathway_name =  pathway_name,
+                    figure_folder = file.path(result_folder_C09,"Boxplot"),
+                    file_name = paste0("GSVA_", pathway_name),
+                    fig.height = 6, fig.width = 6, save=TRUE,
+                    reference_group_1="CC" , compare_group_1="CS", p_value_1 = gsva_matrix[i, "CC_CS_p_value"],
+                    reference_group_2="AC" , compare_group_2="AS", p_value_2 = gsva_matrix[i, "AC_AS_p_value"],
+                    reference_group_3="CS" , compare_group_3="CR", p_value_3 = gsva_matrix[i, "CS_CR_p_value"],
+                    reference_group_4="AS" , compare_group_4="AR", p_value_4 = gsva_matrix[i, "AS_AR_p_value"],
+                    reference_group_5="CC" , compare_group_5="CR", p_value_5 = gsva_matrix[i, "CC_CR_p_value"],
+                    reference_group_6="AC" , compare_group_6="AR", p_value_6 = gsva_matrix[i, "AC_AR_p_value"],
+                    reference_group_7="CC" , compare_group_7="AC", p_value_7 = gsva_matrix[i, "CC_AC_p_value"])
+  # print(p)
+}
+
+
+
+
+# plot the heatmap for the GSVA result
+pathway_list <- rownames(result_df )
+# filter it contain the immune inflame, synap, mitocho, amyloid , tau 
+pathway_list <- pathway_list[grep("amyloid", pathway_list, ignore.case = TRUE)]
+
+
+
+
+# plot for the focus pathway
+set.seed(2025)
+for (i in 1:length(pathway_list)){
+  pathway_name <- pathway_list[i]
+  # print(pathway_name)
+  if (i %% 10 == 0){
+    print(paste0("Processing ", i, " pathway"))
+  }
+  
+  p<- plot_gsva_boxplot_mutil_7(result_df,
+                                condition_list_label = condition_list_select,
+                                pathway_name =  pathway_name,
+                                figure_folder = file.path(result_folder_C09,"Boxplot-amyloid"),
+                                file_name = paste0("GSVA_", pathway_name),
+                                fig.height = 6, fig.width = 6, save=TRUE,
+                                reference_group_1="CC" , compare_group_1="CS", p_value_1 = result_df[i, "CC_CS_p_value"],
+                                reference_group_2="AC" , compare_group_2="AS", p_value_2 = result_df[i, "AC_AS_p_value"],
+                                reference_group_3="CS" , compare_group_3="CR", p_value_3 = result_df[i, "CS_CR_p_value"],
+                                reference_group_4="AS" , compare_group_4="AR", p_value_4 = result_df[i, "AS_AR_p_value"],
+                                reference_group_5="CC" , compare_group_5="CR", p_value_5 = result_df[i, "CC_CR_p_value"],
+                                reference_group_6="AC" , compare_group_6="AR", p_value_6 = result_df[i, "AC_AR_p_value"],
+                                reference_group_7="CC" , compare_group_7="AC", p_value_7 = result_df[i, "CC_AC_p_value"])
+  # print(p)
+}
+
+
+```
+
+
+\newpage
+
+# Session information
+```{r}
+sessionInfo()
+```
+
